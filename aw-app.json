@@ -1,0 +1,66 @@
+{
+  "manifest_version": 1,
+  "id": "secrets",
+  "name": "Secrets",
+  "version": "0.1.0",
+  "description": "Read, write and list the workspace's secrets, where reading goes through a human approval on Telegram. Backed by aw-vault via aw-backend's /api/approval/* \u2014 this app stores nothing itself. NOT the same as an app's own config secrets (`ctx.secrets`, capability `secrets:own`), which are per-app, unshared and ungated.",
+  "publisher": "TekFlox",
+  "category": "Apps",
+  "tier": "inprocess",
+  "runtime": {
+    "python": ">=3.11",
+    "entrypoint": "secrets_app.plugin:SecretsAppPlugin",
+    "pip_requires": [
+      "httpx>=0.24"
+    ]
+  },
+  "permissions": [
+    "routes:register",
+    "net:outbound"
+  ],
+  "contributes": {
+    "routes": [
+      {
+        "prefix": "/api/apps/secrets"
+      }
+    ],
+    "mcp": {
+      "reload_on_save": true,
+      "provides": [
+        "list_secrets",
+        "write_secret",
+        "read_secret"
+      ]
+    },
+    "skills": [
+      {
+        "id": "aw-secrets",
+        "path": "skills/aw-secrets",
+        "description": "How to read, write and list workspace secrets from an agent \u2014 including what the human sees when a read is requested, which scope to ask for, and why a read can time out."
+      }
+    ]
+  },
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "default_scope": {
+        "type": "string",
+        "enum": [
+          "one_shot",
+          "10min",
+          "60min"
+        ],
+        "default": "one_shot",
+        "title": "Default approval scope",
+        "description": "How long an approved read stays valid when the agent doesn't ask for a specific scope. one_shot delivers the value exactly once; 10min/60min let the SAME calling process re-read without prompting again."
+      },
+      "poll_timeout_s": {
+        "type": "integer",
+        "default": 300,
+        "title": "Approval timeout (seconds)",
+        "description": "How long to wait for the human before giving up. aw-backend expires a pending request at 300s, so a longer value here only delays the same answer."
+      }
+    },
+    "required": []
+  }
+}
