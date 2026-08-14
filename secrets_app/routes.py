@@ -58,11 +58,18 @@ def build_app(tools: SecretTools) -> FastAPI:
 
     @api.post("/secrets/{name}/read")
     async def read_secret(name: str, data: dict = Body(default={})):
-        """Blocks until a human answers. See tools.read_secret."""
+        """Returns a request_id immediately unless max_wait_s says otherwise."""
         try:
             return await run_in_threadpool(
                 tools.read_secret, name, (data or {}).get("reason", ""),
-                (data or {}).get("scope"), "rest")
+                (data or {}).get("scope"), "rest", (data or {}).get("max_wait_s"))
+        except Exception as exc:  # noqa: BLE001
+            raise _fail(exc) from exc
+
+    @api.get("/requests/{request_id}")
+    async def collect_secret(request_id: str):
+        try:
+            return await run_in_threadpool(tools.collect_secret, request_id)
         except Exception as exc:  # noqa: BLE001
             raise _fail(exc) from exc
 

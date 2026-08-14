@@ -29,7 +29,8 @@
       "provides": [
         "list_secrets",
         "write_secret",
-        "read_secret"
+        "read_secret",
+        "collect_secret"
       ]
     },
     "skills": [

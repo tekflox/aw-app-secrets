@@ -65,13 +65,18 @@ TOOLS_SCHEMA = [
     {
         "name": "read_secret",
         "description": (
-            "Read a secret's value. This ASKS A HUMAN: a prompt goes to the "
-            "sysadmin Telegram bot showing the secret name and your reason, and "
-            "this call blocks until they tap approve or deny (up to ~5 minutes). "
-            "Expect it to be slow, and expect it to be refused. Do not call it "
-            "speculatively or in a loop — every call interrupts a person. The "
-            "value is delivered ONCE; store it in a variable rather than "
-            "re-reading it."
+            "Ask a human to release a secret. Sends a prompt to the sysadmin "
+            "Telegram bot with the secret name and your reason.\n\n"
+            "By DEFAULT this does not block: it returns immediately with "
+            "status='pending' and a request_id. Carry on with whatever does "
+            "not need the secret, then call collect_secret(request_id) later. "
+            "Set max_wait_s only if you genuinely cannot proceed without it — "
+            "and even then a timeout is not a failure, the request stays alive "
+            "and collectable.\n\n"
+            "Every call interrupts a person. Do not call it speculatively, do "
+            "not call it in a loop, and never re-request something you already "
+            "have a request_id for — that just sends a second prompt. A denial "
+            "is an answer: stop, do not retry."
         ),
         "inputSchema": {
             "type": "object",
@@ -81,8 +86,8 @@ TOOLS_SCHEMA = [
                     "type": "string",
                     "description": (
                         "Why you need it, in one line. This is the ONLY thing the "
-                        "human sees besides the name when deciding — 'deploy to "
-                        "staging' gets approved, 'agent request' does not."
+                        "human sees besides the name when deciding — 'deploy the "
+                        "staging release' gets approved, 'agent request' does not."
                     ),
                 },
                 "scope": {
@@ -94,10 +99,43 @@ TOOLS_SCHEMA = [
                         "ask for those only when you genuinely need repeated reads."
                     ),
                 },
+                "max_wait_s": {
+                    "type": "integer",
+                    "description": (
+                        "Seconds to wait before returning. 0 (default) returns "
+                        "immediately with a request_id. Anything above ~120 is "
+                        "unlikely to survive the MCP gateway's own timeout, so "
+                        "prefer 0 and collect_secret."
+                    ),
+                },
             },
             "required": ["name", "reason"],
         },
     },
+    {
+        "name": "collect_secret",
+        "description": (
+            "Collect a secret you already requested, by request_id, or find out "
+            "where it stands. Safe to call from a different turn or a different "
+            "container than the one that asked — the request lives server-side.\n\n"
+            "The answer always restates WHAT was asked (secret name, your "
+            "reason, scope), because the process collecting is usually not the "
+            "one that requested and cannot be assumed to remember.\n\n"
+            "status='pending' means the human has not answered yet: wait and "
+            "call again, do NOT issue a new read_secret. The value is delivered "
+            "ONCE — keep it in a variable."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "request_id": {
+                    "type": "string",
+                    "description": "The request_id returned by read_secret.",
+                },
+            },
+            "required": ["request_id"],
+        },
+    }
 ]
 
 
@@ -135,7 +173,10 @@ async def handle(body: dict, tools) -> dict:
         if name == "read_secret":
             out = await run_in_threadpool(
                 tools.read_secret, args.get("name", ""), args.get("reason", ""),
-                args.get("scope"), "mcp")
+                args.get("scope"), "mcp", args.get("max_wait_s"))
+            return _ok(req_id, json.dumps(out))
+        if name == "collect_secret":
+            out = await run_in_threadpool(tools.collect_secret, args.get("request_id", ""))
             return _ok(req_id, json.dumps(out))
         return _err(req_id, f"unknown tool {name!r}")
     except ApprovalDenied as exc:

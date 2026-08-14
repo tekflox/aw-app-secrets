@@ -7,15 +7,22 @@ Shape of the thing, so the split makes sense:
                   the value, so asking a human to confirm it tells them nothing
                   they don't already know. The gate exists to stop a value
                   LEAVING the vault.
-  read_secret   — the gated one. Fires a Telegram approval to the sysadmin bot,
-                  waits, and returns the value once.
+  read_secret   — the gated one. Fires a Telegram approval to the sysadmin bot
+                  and, by default, does NOT wait: it returns a request_id the
+                  agent collects later.
+  collect_secret— pick up a request by id, from any process, any turn.
 
-read_secret blocks by design. An agent asking for a secret cannot do anything
-useful until it has one, and a "check back later" handle would just push the
-polling into every caller. The wait is bounded (aw-backend expires a pending
-request at 300s) and every outcome is distinguishable — approved, denied,
-expired, no-store — because "it didn't work" is the failure mode that cost the
-most time in this system's history.
+read_secret used to block for up to five minutes. That was wrong here for two
+measured reasons: an agent of this platform runs in a per-turn container, so
+holding a process open waiting for a human to look at their phone bets against
+the architecture; and the MCP gateway cuts the connection well before the
+window is up (seen live — `http upstream 'aw-secrets' error`). ``max_wait_s``
+now defaults to 0, and a timeout is not an error: the request stays alive and
+collectable.
+
+Every outcome is distinguishable — approved, denied, expired, already
+delivered, still pending, no store at all — because "it didn't work" is the
+failure mode that has cost the most time in this system.
 """
 from __future__ import annotations
 
@@ -64,12 +71,28 @@ class SecretTools:
         return {"ok": True, "name": name, "action": result.get("action", "written")}
 
     def read_secret(self, name: str, reason: str, scope: str | None = None,
-                    caller: str = "") -> dict:
-        """Request a human's approval and return the value.
+                    caller: str = "", max_wait_s: int | None = None) -> dict:
+        """Request a human's approval for a secret.
 
-        ``reason`` is not decoration: it is the only thing the human sees
-        besides the secret's name when deciding, so it is required rather than
-        defaulted to something like "agent request".
+        Returns a ``request_id`` ALWAYS — approved, denied or still pending.
+        That id is how an agent tells "the thing I asked for" apart from any
+        other approval in flight, and it is what :meth:`collect_secret` takes.
+
+        ``max_wait_s`` decides whether this blocks at all:
+
+        * ``0`` (the default) — return immediately with ``status: pending``.
+          The agent carries on and collects later. This is the right mode for
+          anything running in a per-turn container: holding a process open
+          waiting for a human to look at their phone is betting against the
+          architecture, and the MCP gateway cuts the connection long before
+          the five-minute approval window is up anyway (seen live).
+        * ``> 0`` — wait up to that many seconds, then return whatever is true
+          at that moment. A timeout is NOT an error here: the request is still
+          alive on the server and still collectable. Only an explicit denial or
+          a genuine expiry raises.
+
+        ``reason`` is required because it is the only thing the human sees
+        besides the name when deciding.
         """
         name = (name or "").strip()
         if not name:
@@ -81,38 +104,89 @@ class SecretTools:
                 "whether to release this secret"
             )
         scope = scope if scope in VALID_SCOPES else self.default_scope
+        wait = self.poll_timeout_s if max_wait_s is None else max(0, int(max_wait_s))
 
         request_id = self.backend.request_read(name, reason, scope, caller)
-        log.info("secrets: read requested for %s (scope=%s, request=%s)",
-                 name, scope, request_id)
+        log.info("secrets: read requested for %s (scope=%s, request=%s, max_wait=%ss)",
+                 name, scope, request_id, wait)
 
-        deadline = time.monotonic() + self.poll_timeout_s
-        while time.monotonic() < deadline:
+        deadline = time.monotonic() + wait
+        while True:
             status, value = self.backend.poll_read(request_id)
             if status == "approved":
                 if value is None:
-                    # Approved but nothing delivered: the one-shot value was
-                    # already consumed by another poll. Say exactly that rather
-                    # than returning an empty string that reads like a secret
-                    # whose value is "".
                     raise ApprovalDenied(
                         f"'{name}' was approved but its value was already delivered "
                         "(one-shot). Request it again."
                     )
-                return {"ok": True, "name": name, "value": value,
-                        "scope": scope, "request_id": request_id}
+                return self._delivered(request_id, name, reason, scope, value)
             if status in ("denied", "rejected"):
                 raise ApprovalDenied(f"'{name}' was denied by the human.")
             if status == "expired":
-                raise ApprovalDenied(
-                    f"the request for '{name}' expired with no answer."
-                )
+                raise ApprovalDenied(f"the request for '{name}' expired with no answer.")
+            if time.monotonic() >= deadline:
+                return self._still_pending(request_id, name, reason, scope, wait)
             time.sleep(POLL_INTERVAL_S)
 
-        raise ApprovalDenied(
-            f"timed out after {self.poll_timeout_s}s waiting for approval of '{name}'. "
-            "The prompt was delivered; nobody answered it."
-        )
+    def collect_secret(self, request_id: str) -> dict:
+        """Collect a previously requested secret, or report where it stands.
+
+        Self-describing on purpose: an agent calling this may be a DIFFERENT
+        process from the one that asked — a later turn, a fresh container, a
+        wake-up. It cannot be assumed to remember what the request was about,
+        so every answer restates the secret name, the reason given and the
+        scope, not just a status word.
+        """
+        request_id = (request_id or "").strip()
+        if not request_id:
+            raise ValueError("request_id is required")
+
+        info = self.backend.describe(request_id)
+        status = info.get("status")
+        name = info.get("secret_name") or "?"
+        reason = info.get("reason") or ""
+        scope = info.get("scope") or "one_shot"
+
+        if status == "approved" and info.get("value") is not None:
+            return self._delivered(request_id, name, reason, scope, info["value"])
+        if status == "approved":
+            raise ApprovalDenied(
+                f"'{name}' was approved but its value was already delivered "
+                "(one-shot). Request it again."
+            )
+        if status in ("denied", "rejected"):
+            raise ApprovalDenied(f"'{name}' was denied by the human.")
+        if status == "expired":
+            raise ApprovalDenied(f"the request for '{name}' expired with no answer.")
+        if status in (None, "not_found"):
+            raise ApprovalDenied(f"request {request_id} is unknown or has expired.")
+        return self._still_pending(request_id, name, reason, scope, 0)
+
+    # ── response shapes ──────────────────────────────────────────────────
+    #
+    # Both carry the full context of the request, not just a status. The
+    # collector is often not the asker.
+
+    @staticmethod
+    def _delivered(request_id, name, reason, scope, value) -> dict:
+        return {
+            "ok": True, "status": "approved", "request_id": request_id,
+            "name": name, "reason": reason, "scope": scope, "value": value,
+            "note": "Delivered once. Keep it in a variable — collecting again "
+                    "returns no value and re-reading prompts the human afresh.",
+        }
+
+    @staticmethod
+    def _still_pending(request_id, name, reason, scope, waited) -> dict:
+        return {
+            "ok": True, "status": "pending", "request_id": request_id,
+            "name": name, "reason": reason, "scope": scope,
+            "note": (
+                f"Not answered yet{f' after {waited}s' if waited else ''}. The prompt IS "
+                f"delivered and still live — do NOT request it again, that only sends a "
+                f"second prompt. Call collect_secret('{request_id}') later."
+            ),
+        }
 
     def delete_secret(self, name: str) -> dict:
         name = (name or "").strip()

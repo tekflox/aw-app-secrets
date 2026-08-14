@@ -49,6 +49,13 @@ class _FakeBackend:
         idx = min(self.polls - 1, len(self.sequence) - 1)
         return self.sequence[idx]
 
+    def describe(self, request_id):
+        if request_id != "req-1":
+            return {"status": "not_found"}
+        status, value = self.poll_read(request_id)
+        return {"status": status, "value": value, "secret_name": "k",
+                "reason": "porque sim", "scope": "one_shot"}
+
 
 def _tools(backend, **kw):
     return SecretTools(backend, **kw)
@@ -93,12 +100,63 @@ def test_write_refuses_a_blank_name():
 
 # ── read: the gated path ─────────────────────────────────────────────────
 
-def test_read_returns_the_value_once_approved():
+def test_read_does_not_block_by_default():
+    """The default is fire-and-collect. An agent of this platform runs in a
+    per-turn container, and the MCP gateway cuts a long call anyway — both
+    measured, not assumed."""
+    b = _FakeBackend([("pending", None)])
+    out = _tools(b).read_secret("k", "porque sim", max_wait_s=0)
+
+    assert out["status"] == "pending"
+    assert out["request_id"] == "req-1"
+    assert b.polls <= 1, "max_wait_s=0 must not sit in the poll loop"
+
+
+def test_a_pending_answer_says_what_was_asked():
+    """The collector is usually a different process with no memory of the ask."""
+    out = _tools(_FakeBackend([("pending", None)])).read_secret(
+        "resend_api_key", "deploy staging", max_wait_s=0)
+
+    assert out["name"] == "resend_api_key"
+    assert out["reason"] == "deploy staging"
+    assert "collect_secret" in out["note"]
+
+
+def test_read_returns_the_value_when_it_can_wait():
     b = _FakeBackend([("pending", None), ("pending", None), ("approved", "s3cr3t")])
-    out = _tools(b, poll_timeout_s=30).read_secret("k", "porque sim")
+    out = _tools(b).read_secret("k", "porque sim", max_wait_s=30)
 
     assert out["value"] == "s3cr3t"
     assert b.requests[0]["reason"] == "porque sim"
+
+
+def test_a_wait_that_runs_out_is_not_an_error():
+    """The prompt is still live and still collectable — raising here would
+    make an agent give up on something the human is about to approve."""
+    b = _FakeBackend([("pending", None)])
+    out = _tools(b).read_secret("k", "r", max_wait_s=0)
+
+    assert out["status"] == "pending"
+    assert out["ok"] is True
+
+
+def test_collect_returns_the_value_and_the_context():
+    b = _FakeBackend([("approved", "s3cr3t")])
+    out = _tools(b).collect_secret("req-1")
+
+    assert out["value"] == "s3cr3t"
+    assert out["name"] == "k"
+    assert out["reason"] == "porque sim"
+
+
+def test_collect_on_an_unknown_id_is_reported_as_such():
+    with pytest.raises(ApprovalDenied, match="unknown or has expired"):
+        _tools(_FakeBackend()).collect_secret("never-existed")
+
+
+def test_collect_requires_an_id():
+    with pytest.raises(ValueError, match="request_id is required"):
+        _tools(_FakeBackend()).collect_secret("")
 
 
 def test_read_requires_a_reason():
@@ -111,21 +169,13 @@ def test_read_requires_a_reason():
 def test_a_denial_is_reported_as_a_denial():
     b = _FakeBackend([("denied", None)])
     with pytest.raises(ApprovalDenied, match="denied by the human"):
-        _tools(b, poll_timeout_s=30).read_secret("k", "r")
+        _tools(b).read_secret("k", "r", max_wait_s=30)
 
 
 def test_an_expiry_is_distinguishable_from_a_denial():
     b = _FakeBackend([("expired", None)])
     with pytest.raises(ApprovalDenied, match="expired with no answer"):
-        _tools(b, poll_timeout_s=30).read_secret("k", "r")
-
-
-def test_a_timeout_says_the_prompt_was_delivered():
-    """'Nobody answered' and 'nothing was sent' need different fixes, so they
-    must not share a message."""
-    b = _FakeBackend([("pending", None)])
-    with pytest.raises(ApprovalDenied, match="nobody answered"):
-        _tools(b, poll_timeout_s=0).read_secret("k", "r")
+        _tools(b).read_secret("k", "r", max_wait_s=30)
 
 
 def test_approved_with_no_value_is_not_an_empty_secret():
@@ -133,7 +183,7 @@ def test_approved_with_no_value_is_not_an_empty_secret():
     would look like a secret whose value is the empty string."""
     b = _FakeBackend([("approved", None)])
     with pytest.raises(ApprovalDenied, match="already delivered"):
-        _tools(b, poll_timeout_s=30).read_secret("k", "r")
+        _tools(b).read_secret("k", "r", max_wait_s=30)
 
 
 # ── scope ────────────────────────────────────────────────────────────────
@@ -142,14 +192,14 @@ def test_an_unknown_scope_falls_back_to_the_configured_default():
     """A typo must not silently widen the grant — 'sixty_minutes' becoming a
     60-minute window would be the wrong way to fail."""
     b = _FakeBackend()
-    _tools(b, default_scope="one_shot").read_secret("k", "r", scope="sixty_minutes")
+    _tools(b, default_scope="one_shot").read_secret("k", "r", scope="sixty_minutes", max_wait_s=30)
 
     assert b.requests[0]["scope"] == "one_shot"
 
 
 def test_an_explicit_scope_is_passed_through():
     b = _FakeBackend()
-    _tools(b).read_secret("k", "r", scope="10min")
+    _tools(b).read_secret("k", "r", scope="10min", max_wait_s=30)
 
     assert b.requests[0]["scope"] == "10min"
 

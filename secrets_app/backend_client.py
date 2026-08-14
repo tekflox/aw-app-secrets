@@ -117,6 +117,22 @@ class SecretsBackend:
         r.raise_for_status()
         return r.json()["request_id"]
 
+    def describe(self, request_id: str) -> dict:
+        """Full state of a request: status, and the metadata that says what it
+        WAS — secret name, reason, scope.
+
+        Needed because the collector is frequently not the asker: a later turn,
+        a fresh container, a wake-up. Status alone would arrive without any way
+        to know which of several in-flight approvals it belongs to.
+        """
+        self._require()
+        r = httpx.get(f"{self.backend_url}/api/approval/status/{request_id}",
+                      headers=self._headers(), timeout=self.timeout)
+        if r.status_code == 404:
+            return {"status": "not_found"}
+        r.raise_for_status()
+        return r.json()
+
     def poll_read(self, request_id: str) -> tuple[str, str | None]:
         """Return ``(status, value)``. ``value`` is only ever set once.
 
