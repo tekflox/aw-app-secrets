@@ -54,7 +54,7 @@ class _FakeBackend:
             return {"status": "not_found"}
         status, value = self.poll_read(request_id)
         return {"status": status, "value": value, "secret_name": "k",
-                "reason": "porque sim", "scope": "one_shot"}
+                "reason": "deploy the staging release", "scope": "one_shot"}
 
 
 def _tools(backend, **kw):
@@ -105,7 +105,7 @@ def test_read_does_not_block_by_default():
     per-turn container, and the MCP gateway cuts a long call anyway — both
     measured, not assumed."""
     b = _FakeBackend([("pending", None)])
-    out = _tools(b).read_secret("k", "porque sim", max_wait_s=0)
+    out = _tools(b).read_secret("k", "deploy the staging release", max_wait_s=0)
 
     assert out["status"] == "pending"
     assert out["request_id"] == "req-1"
@@ -124,10 +124,10 @@ def test_a_pending_answer_says_what_was_asked():
 
 def test_read_returns_the_value_when_it_can_wait():
     b = _FakeBackend([("pending", None), ("pending", None), ("approved", "s3cr3t")])
-    out = _tools(b).read_secret("k", "porque sim", max_wait_s=30)
+    out = _tools(b).read_secret("k", "deploy the staging release", max_wait_s=30)
 
     assert out["value"] == "s3cr3t"
-    assert b.requests[0]["reason"] == "porque sim"
+    assert b.requests[0]["reason"] == "deploy the staging release"
 
 
 def test_a_wait_that_runs_out_is_not_an_error():
@@ -146,7 +146,7 @@ def test_collect_returns_the_value_and_the_context():
 
     assert out["value"] == "s3cr3t"
     assert out["name"] == "k"
-    assert out["reason"] == "porque sim"
+    assert out["reason"] == "deploy the staging release"
 
 
 def test_collect_on_an_unknown_id_is_reported_as_such():
