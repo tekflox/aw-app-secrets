@@ -214,3 +214,27 @@ def test_no_backend_link_is_its_own_error():
     b = SecretsBackend(backend_url="", workspace="aw", token="")
     with pytest.raises(BackendUnavailable, match="no cloud link"):
         SecretTools(b).list_secrets()
+
+
+def test_omitting_max_wait_means_do_not_wait(monkeypatch):
+    """`poll_timeout_s` is the CEILING for an explicit wait, not the default.
+    Reading it as the default made the very first real call block for 30s
+    against a docstring that promised the opposite."""
+    b = _FakeBackend([("pending", None)])
+    out = _tools(b, poll_timeout_s=300).read_secret("k", "r")
+
+    assert out["status"] == "pending"
+    assert b.polls <= 1
+
+
+def test_an_explicit_wait_is_capped_at_the_configured_timeout():
+    """A caller asking for an hour must not outlive the server-side expiry —
+    it would sit polling a request that died at 300s."""
+    import time as _t
+
+    b = _FakeBackend([("pending", None)])
+    started = _t.monotonic()
+    out = SecretTools(b, poll_timeout_s=1).read_secret("k", "r", max_wait_s=3600)
+
+    assert out["status"] == "pending"
+    assert _t.monotonic() - started < 8, "waited past the configured ceiling"

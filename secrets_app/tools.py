@@ -104,7 +104,13 @@ class SecretTools:
                 "whether to release this secret"
             )
         scope = scope if scope in VALID_SCOPES else self.default_scope
-        wait = self.poll_timeout_s if max_wait_s is None else max(0, int(max_wait_s))
+        # Absent means DO NOT WAIT. poll_timeout_s is the ceiling for an
+        # explicit wait, not the default — reading it as the default is exactly
+        # the bug this line replaces: the docstring said "0 (the default)" while
+        # the code sat in the poll loop for the full 300s, and the first real
+        # call blocked for 30s until curl gave up.
+        wait = 0 if max_wait_s is None else min(max(0, int(max_wait_s)),
+                                                self.poll_timeout_s)
 
         request_id = self.backend.request_read(name, reason, scope, caller)
         log.info("secrets: read requested for %s (scope=%s, request=%s, max_wait=%ss)",
