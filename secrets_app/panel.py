@@ -73,6 +73,10 @@ PANEL_HTML = """<!DOCTYPE html>
           border: 1px solid var(--warn); color: var(--warn); white-space: nowrap; }
   .ask { padding: 8px 0 10px; display: none; gap: 8px; align-items: center; }
   .ask.open { display: flex; }
+  /* Always visible, unlike .ask, which stays hidden until Reveal is pressed.
+     Reusing .ask here made the allowlist editor invisible — the API had a
+     setting the page silently never offered. */
+  .allow { padding: 4px 0 10px; display: flex; gap: 8px; align-items: center; }
   .out { font-family: ui-monospace, monospace; font-size: 12px; word-break: break-all;
          background: #10131a; border: 1px solid var(--border); border-radius: 6px;
          padding: 8px; margin: 2px 0 10px; display: none; }
@@ -198,7 +202,7 @@ function secretRow(s) {
   // everything in the workspace, this opens it to the callers you name — the
   // 3am scheduled task, and nothing else. Shown next to the toggle because a
   // reader comparing the two is exactly the decision being made.
-  const allow = el('div', 'ask');
+  const allow = el('div', 'allow');
   allow.appendChild(el('span', 'desc', 'No approval for:'));
   const who = document.createElement('input');
   who.type = 'text';

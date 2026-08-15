@@ -460,3 +460,13 @@ def test_editing_who_does_not_have_to_restate_whether():
 
     assert b.policies[0][3] == "agent:x"
     assert b.policies[1][3] is None
+
+
+def test_the_allowlist_editor_is_not_hidden_behind_reveal():
+    """It was: the row reused the `.ask` class, which stays display:none until
+    Reveal is pressed. The API had a setting the page silently never offered —
+    caught by screenshotting the panel rather than by reading it."""
+    from secrets_app.panel import PANEL_HTML
+
+    assert "el('div', 'allow')" in PANEL_HTML
+    assert ".allow { padding" in PANEL_HTML and "display: flex" in PANEL_HTML
