@@ -102,7 +102,7 @@ class SecretsBackend:
     # ── release policy ───────────────────────────────────────────────────
 
     def set_policy(self, name: str, auto_approve: bool, updated_by: str = "",
-                   note: str = "") -> dict:
+                   note: str = "", auto_approve_for: str | None = None) -> dict:
         """Turn the human approval gate on or off for one secret.
 
         Lives in aw-backend, not here, and that is the point: aw-backend is
@@ -112,9 +112,14 @@ class SecretsBackend:
         its own prompt would just make the two disagree.
         """
         self._require()
+        body = {"auto_approve": bool(auto_approve),
+                "updated_by": updated_by, "note": note}
+        # Omitted, not sent empty, when the caller did not mention it: absent
+        # means "leave the allowlist alone", and sending "" would wipe it.
+        if auto_approve_for is not None:
+            body["auto_approve_for"] = auto_approve_for
         r = httpx.put(f"{self.backend_url}/api/approval/policies/{name}",
-                      json={"auto_approve": bool(auto_approve),
-                            "updated_by": updated_by, "note": note},
+                      json=body,
                       headers=self._headers(), timeout=self.timeout)
         r.raise_for_status()
         return r.json()

@@ -93,7 +93,9 @@ def build_app(tools: SecretTools) -> FastAPI:
             return await run_in_threadpool(
                 tools.set_policy, name, bool((data or {}).get("auto_approve")),
                 str((data or {}).get("updated_by") or "aw-app-secrets"),
-                str((data or {}).get("note") or ""))
+                str((data or {}).get("note") or ""),
+                (None if "auto_approve_for" not in (data or {})
+                 else str((data or {}).get("auto_approve_for") or "")))
         except Exception as exc:  # noqa: BLE001
             raise _fail(exc) from exc
 

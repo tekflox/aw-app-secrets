@@ -33,10 +33,12 @@ class _FakeBackend:
     def list_secrets(self):
         return self.secrets
 
-    def set_policy(self, name, auto_approve, updated_by="", note=""):
-        self.policies.append((name, auto_approve, updated_by))
+    def set_policy(self, name, auto_approve, updated_by="", note="",
+                   auto_approve_for=None):
+        self.policies.append((name, auto_approve, updated_by, auto_approve_for))
         return {"secret_name": name, "auto_approve": auto_approve,
-                "updated_by": updated_by, "note": note}
+                "updated_by": updated_by, "note": note,
+                "auto_approve_for": auto_approve_for or ""}
 
     def write_secret(self, name, value, description=""):
         self.writes.append((name, value, description))
@@ -78,7 +80,7 @@ def test_list_never_returns_a_value_even_if_the_backend_sends_one():
 
     assert out["count"] == 1
     assert out["secrets"] == [{"name": "resend_api_key", "description": "Resend",
-                               "auto_approve": False}]
+                               "auto_approve": False, "auto_approve_for": ""}]
     assert "LEAKED" not in str(out)
 
 
@@ -104,7 +106,7 @@ def test_setting_the_policy_reaches_the_backend_not_local_state():
     out = _tools(b).set_policy("resend_api_key", True, updated_by="settings-panel")
 
     assert out["ok"] is True
-    assert b.policies == [("resend_api_key", True, "settings-panel")]
+    assert b.policies == [("resend_api_key", True, "settings-panel", None)]
 
 
 def test_setting_the_policy_requires_a_name():
@@ -436,3 +438,25 @@ def test_the_agent_is_not_a_tool_argument_either():
 
     read = next(t for t in http_handler.TOOLS_SCHEMA if t["name"] == "read_secret")
     assert "agent" not in read["inputSchema"]["properties"]
+
+
+def test_the_listing_carries_the_allowlist_to_the_panel():
+    """The panel renders one row per secret; a row that showed only the blunt
+    flag would call a secret gated while a named caller walks past it."""
+    b = _FakeBackend(secrets=[{"name": "k", "description": "",
+                               "auto_approve_for": "agent:nightly-backup"}])
+
+    assert _tools(b).list_secrets()["secrets"][0]["auto_approve_for"] \
+        == "agent:nightly-backup"
+
+
+def test_editing_who_does_not_have_to_restate_whether():
+    """The panel has two controls on the same row. Saving the allowlist must
+    not flip the gate, and flipping the gate must not wipe the allowlist —
+    absent means leave it alone."""
+    b = _FakeBackend()
+    _tools(b).set_policy("k", False, auto_approve_for="agent:x")
+    _tools(b).set_policy("k", True)
+
+    assert b.policies[0][3] == "agent:x"
+    assert b.policies[1][3] is None

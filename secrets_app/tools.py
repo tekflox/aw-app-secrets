@@ -53,7 +53,10 @@ class SecretTools:
                  # Whether reading this one still asks a human. Included because
                  # a list that hides it would describe the vault as uniformly
                  # gated when parts of it are not.
-                 "auto_approve": bool(s.get("auto_approve"))}
+                 "auto_approve": bool(s.get("auto_approve")),
+                 # The narrow form of the same thing: callers allowed past the
+                 # prompt for this one secret. Empty means nobody.
+                 "auto_approve_for": s.get("auto_approve_for") or ""}
                 for s in secrets
             ],
             "count": len(secrets),
@@ -64,7 +67,7 @@ class SecretTools:
         }
 
     def set_policy(self, name: str, auto_approve: bool, updated_by: str = "",
-                   note: str = "") -> dict:
+                   note: str = "", auto_approve_for: str | None = None) -> dict:
         """Turn the approval gate on or off for one secret.
 
         Not exposed as an MCP tool, deliberately. An agent that can disable the
@@ -76,7 +79,8 @@ class SecretTools:
         name = (name or "").strip()
         if not name:
             raise ValueError("name is required")
-        result = self.backend.set_policy(name, auto_approve, updated_by, note)
+        result = self.backend.set_policy(name, auto_approve, updated_by, note,
+                                         auto_approve_for)
         log.warning("secrets: approval gate for %s is now %s (by %s)", name,
                     "OFF (instant release)" if auto_approve else "ON", updated_by or "?")
         return {"ok": True, **result}

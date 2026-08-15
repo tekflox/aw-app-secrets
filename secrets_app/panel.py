@@ -164,6 +164,8 @@ function secretRow(s) {
   row.appendChild(info);
 
   if (s.auto_approve) row.appendChild(el('span', 'pill', 'no approval'));
+  else if (s.auto_approve_for) row.appendChild(
+    el('span', 'pill', 'open to ' + s.auto_approve_for.split(',').length + ' caller(s)'));
 
   // The gate toggle. Checked = instant release, i.e. NO human asked.
   const lab = el('label', 'toggle');
@@ -191,11 +193,47 @@ function secretRow(s) {
   ask.appendChild(reason); ask.appendChild(go);
   wrap.appendChild(ask);
 
+  // Who may read this one WITHOUT a prompt. A second, narrower answer to the
+  // question the "instant" toggle answers bluntly: that opens the secret to
+  // everything in the workspace, this opens it to the callers you name — the
+  // 3am scheduled task, and nothing else. Shown next to the toggle because a
+  // reader comparing the two is exactly the decision being made.
+  const allow = el('div', 'ask');
+  allow.appendChild(el('span', 'desc', 'No approval for:'));
+  const who = document.createElement('input');
+  who.type = 'text';
+  who.className = 'grow';
+  who.value = s.auto_approve_for || '';
+  who.placeholder = 'agent:nightly-backup, agent:another — empty means nobody';
+  const saveWho = el('button', null, 'Save');
+  allow.appendChild(who); allow.appendChild(saveWho);
+  wrap.appendChild(allow);
+
   const out = el('div', 'out');
   wrap.appendChild(out);
   const status = el('div', 'status');
   status.style.paddingBottom = '6px';
   wrap.appendChild(status);
+
+  saveWho.addEventListener('click', async () => {
+    saveWho.disabled = true;
+    try {
+      // auto_approve is sent unchanged: this button edits WHO, not whether.
+      await api('PUT', '/policies/' + encodeURIComponent(s.name),
+                {auto_approve: !!s.auto_approve, auto_approve_for: who.value,
+                 updated_by: 'settings-panel'});
+      status.className = 'status';
+      status.textContent = who.value.trim()
+        ? 'Saved — those callers read it without asking anyone.'
+        : 'Saved — nobody skips the approval for this one.';
+      await load();
+    } catch (e) {
+      status.className = 'status err';
+      status.textContent = String(e.message || e);
+    } finally {
+      saveWho.disabled = false;
+    }
+  });
 
   cb.addEventListener('change', async () => {
     cb.disabled = true;
