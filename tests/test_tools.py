@@ -45,9 +45,9 @@ class _FakeBackend:
     def delete_secret(self, name):
         return {"deleted": name}
 
-    def request_read(self, name, reason, scope="one_shot", caller=""):
+    def request_read(self, name, reason, scope="one_shot", caller="", caller_key=None):
         self.requests.append({"name": name, "reason": reason, "scope": scope,
-                              "caller": caller})
+                              "caller": caller, "caller_key": caller_key})
         return "req-1"
 
     def poll_read(self, request_id):
@@ -285,3 +285,113 @@ def test_an_explicit_wait_is_capped_at_the_configured_timeout():
 
     assert out["status"] == "pending"
     assert _t.monotonic() - started < 8, "waited past the configured ceiling"
+
+
+# ── who a window grant belongs to ────────────────────────────────────────
+
+def test_a_read_names_the_caller_a_window_would_belong_to(monkeypatch):
+    """`--aw-scope 10min` was silently useless because nothing ever told
+    aw-backend who was asking. Every read now carries that identity."""
+    monkeypatch.setenv("AW_SESSION_ID", "sess-42")
+    b = _FakeBackend()
+    _tools(b).read_secret("k", "deploy the staging release", max_wait_s=30)
+
+    assert b.requests[0]["caller_key"] == "session:sess-42"
+
+
+def test_an_explicit_session_beats_the_environment(monkeypatch):
+    """The MCP path: the agent runs in one container and this code in another,
+    so the session arrives on the request rather than in the env — and must
+    win over whatever env this process happens to have."""
+    monkeypatch.setenv("AW_SESSION_ID", "the-wrong-one")
+    b = _FakeBackend()
+    _tools(b).read_secret("k", "r", max_wait_s=30, session="sess-from-header")
+
+    assert b.requests[0]["caller_key"] == "session:sess-from-header"
+
+
+def test_a_terminal_is_identified_by_its_shell_not_by_this_process(monkeypatch):
+    """Keying on our own pid would make every invocation a different caller —
+    the exact failure the old pid matching had."""
+    from secrets_app import caller
+
+    monkeypatch.delenv("AW_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    key = caller.caller_key(allow_local=True)
+
+    assert key.startswith("proc:")
+    assert str(__import__("os").getppid()) in key
+
+
+def test_an_unidentifiable_caller_gets_no_key(monkeypatch):
+    """No key means no window, and every read asks again. Being unidentified
+    must never mean sharing whichever window happens to be open."""
+    from secrets_app import caller
+
+    monkeypatch.delenv("AW_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    monkeypatch.setattr(caller.os, "getppid", lambda: 1)
+
+    assert caller.caller_key(allow_local=True) is None
+
+
+def test_the_shell_key_survives_a_recycled_pid(monkeypatch):
+    """Without the start time, a new shell inheriting a dead one's pid would
+    inherit its grants too."""
+    from secrets_app import caller
+
+    monkeypatch.delenv("AW_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    monkeypatch.setattr(caller, "_proc_start_time", lambda pid: "999")
+    first = caller.caller_key(allow_local=True)
+    monkeypatch.setattr(caller, "_proc_start_time", lambda pid: "1000")
+
+    assert first != caller.caller_key(allow_local=True)
+
+
+def test_the_session_is_not_a_tool_argument():
+    """An agent that could name its own session could name somebody else's and
+    inherit a grant it never earned. It arrives as a header instead."""
+    from secrets_app.mcp import http_handler
+
+    read = next(t for t in http_handler.TOOLS_SCHEMA if t["name"] == "read_secret")
+    assert "session" not in read["inputSchema"]["properties"]
+    assert "caller_key" not in read["inputSchema"]["properties"]
+
+
+def test_an_unexpanded_placeholder_is_not_an_identity(monkeypatch):
+    """AP writes the session header as ${AW_SESSION_ID} so a frozen warm config
+    still resolves per turn. A client that does not expand it would send that
+    literal string — identical for every agent, and therefore one shared key
+    out of the thing meant to keep them apart."""
+    from secrets_app import caller
+
+    monkeypatch.delenv("AW_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    key = caller.caller_key("${AW_SESSION_ID}")
+
+    assert key is None
+    assert "$" not in (key or "")
+
+
+def test_the_app_never_mints_a_local_key_for_a_remote_caller(monkeypatch):
+    """Inside the app's server process, "the parent shell" is the server's own
+    supervisor — the same for every REST caller in the workspace. Falling back
+    to it would mint one shared key and hand every caller a window the first of
+    them earned."""
+    from secrets_app import caller
+
+    monkeypatch.delenv("AW_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+
+    assert caller.caller_key() is None
+    assert caller.caller_key(allow_local=True).startswith("proc:")
+
+
+def test_a_caller_supplied_key_wins_over_anything_derived(monkeypatch):
+    """A CLI in another container is the only party that can see its own shell."""
+    monkeypatch.setenv("AW_SESSION_ID", "sess-here")
+    b = _FakeBackend()
+    _tools(b).read_secret("k", "r", max_wait_s=30, caller_key="proc:other-host:42:99")
+
+    assert b.requests[0]["caller_key"] == "proc:other-host:42:99"

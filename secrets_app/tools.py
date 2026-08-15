@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import time
 
+from . import caller as caller_module
 from .backend_client import ApprovalDenied, BackendUnavailable, SecretsBackend
 
 log = logging.getLogger("aw_apps.secrets")
@@ -94,7 +95,9 @@ class SecretTools:
         return {"ok": True, "name": name, "action": result.get("action", "written")}
 
     def read_secret(self, name: str, reason: str, scope: str | None = None,
-                    caller: str = "", max_wait_s: int | None = None) -> dict:
+                    caller: str = "", max_wait_s: int | None = None,
+                    session: str | None = None,
+                    caller_key: str | None = None) -> dict:
         """Request a human's approval for a secret.
 
         Returns a ``request_id`` ALWAYS — approved, denied or still pending.
@@ -116,6 +119,11 @@ class SecretTools:
 
         ``reason`` is required because it is the only thing the human sees
         besides the name when deciding.
+
+        ``session`` names the agent session this read belongs to, when the
+        caller knows it and this process cannot (the MCP path — the agent runs
+        in one container, this code in another). It decides who a ``10min`` or
+        ``60min`` grant is reusable by; see ``caller.py``.
         """
         name = (name or "").strip()
         if not name:
@@ -135,7 +143,15 @@ class SecretTools:
         wait = 0 if max_wait_s is None else min(max(0, int(max_wait_s)),
                                                 self.poll_timeout_s)
 
-        request_id = self.backend.request_read(name, reason, scope, caller)
+        # Who this grant belongs to, if a window scope is in play.
+        #
+        # An explicit key wins: a CLI in another container is the only party
+        # that can see its own shell, so it computes its own and sends it. What
+        # this process may derive on its own is a SESSION and nothing else —
+        # deriving a local one here would key on the app server's parent, which
+        # is the same for every REST caller in the workspace.
+        key = (caller_key or "").strip() or caller_module.caller_key(session)
+        request_id = self.backend.request_read(name, reason, scope, caller, key)
         log.info("secrets: read requested for %s (scope=%s, request=%s, max_wait=%ss)",
                  name, scope, request_id, wait)
 

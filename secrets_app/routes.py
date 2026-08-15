@@ -11,13 +11,18 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 
 from .backend_client import ApprovalDenied, BackendUnavailable
 from .tools import SecretTools
 
 log = logging.getLogger("aw_apps.secrets")
+
+#: Set by the Agents Platform in each agent's MCP config and forwarded by
+#: aw-mcp-gateway. Names the agent SESSION, which is stable across the per-turn
+#: containers an agent runs in — unlike X-Aw-Caller-Run-Id, which is not.
+SESSION_HEADER = "X-Aw-Caller-Session-Id"
 
 
 def build_app(tools: SecretTools) -> FastAPI:
@@ -57,12 +62,20 @@ def build_app(tools: SecretTools) -> FastAPI:
             raise _fail(exc) from exc
 
     @api.post("/secrets/{name}/read")
-    async def read_secret(name: str, data: dict = Body(default={})):
-        """Returns a request_id immediately unless max_wait_s says otherwise."""
+    async def read_secret(name: str, request: Request, data: dict = Body(default={})):
+        """Returns a request_id immediately unless max_wait_s says otherwise.
+
+        ``session`` in the body is how a CLI in ANOTHER container names its
+        caller: this process cannot see that process's env or parent shell, so
+        it has to be told. A header is accepted too, for the same reason and by
+        the same rule as the MCP path.
+        """
         try:
             return await run_in_threadpool(
                 tools.read_secret, name, (data or {}).get("reason", ""),
-                (data or {}).get("scope"), "rest", (data or {}).get("max_wait_s"))
+                (data or {}).get("scope"), "rest", (data or {}).get("max_wait_s"),
+                (data or {}).get("session") or request.headers.get(SESSION_HEADER),
+                (data or {}).get("caller_key"))
         except Exception as exc:  # noqa: BLE001
             raise _fail(exc) from exc
 
@@ -102,13 +115,18 @@ def build_app(tools: SecretTools) -> FastAPI:
     # MCP — Streamable HTTP, auto-discovered by aw-mcp-gateway's app-scan
     # (see mcp/self_register.py + mcp/http_handler.py).
     @api.post("/mcp")
-    async def mcp_post(data: dict | list = Body(...)):
+    async def mcp_post(request: Request, data: dict | list = Body(...)):
         from .mcp.http_handler import handle as mcp_handle
 
+        # The calling agent's session, forwarded by aw-mcp-gateway from the
+        # header the Agents Platform writes into that agent's MCP config. A
+        # header rather than a tool argument: the agent never gets to say who
+        # it is, so it cannot claim another session's window grant.
+        session = request.headers.get(SESSION_HEADER)
         msgs = data if isinstance(data, list) else [data]
         out = []
         for m in msgs:
-            r = await mcp_handle(m, tools)
+            r = await mcp_handle(m, tools, session)
             if r:
                 out.append(r)
         if not out:

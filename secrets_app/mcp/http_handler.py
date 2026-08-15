@@ -139,8 +139,15 @@ TOOLS_SCHEMA = [
 ]
 
 
-async def handle(body: dict, tools) -> dict:
-    """Dispatch one JSON-RPC message. ``tools`` is a :class:`SecretTools`."""
+async def handle(body: dict, tools, session: str | None = None) -> dict:
+    """Dispatch one JSON-RPC message. ``tools`` is a :class:`SecretTools`.
+
+    ``session`` is the calling agent's session id, forwarded by the MCP gateway
+    from the header the Agents Platform put in the agent's own config. It is
+    what makes a ``10min`` window reusable across an agent's turns, and it is
+    NOT a tool argument on purpose: an agent that could name its own session
+    could name somebody else's and inherit a grant it never earned.
+    """
     method = body.get("method")
     req_id = body.get("id")
 
@@ -173,7 +180,7 @@ async def handle(body: dict, tools) -> dict:
         if name == "read_secret":
             out = await run_in_threadpool(
                 tools.read_secret, args.get("name", ""), args.get("reason", ""),
-                args.get("scope"), "mcp", args.get("max_wait_s"))
+                args.get("scope"), "mcp", args.get("max_wait_s"), session)
             return _ok(req_id, json.dumps(out))
         if name == "collect_secret":
             out = await run_in_threadpool(tools.collect_secret, args.get("request_id", ""))

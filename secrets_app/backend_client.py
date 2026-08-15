@@ -122,7 +122,7 @@ class SecretsBackend:
     # ── the gated read ───────────────────────────────────────────────────
 
     def request_read(self, name: str, reason: str, scope: str = "one_shot",
-                     caller: str = "") -> str:
+                     caller: str = "", caller_key: str | None = None) -> str:
         """Ask a human for this secret's value; returns the request id.
 
         Does not block. The value is collected by :meth:`poll_read` — the two
@@ -132,7 +132,12 @@ class SecretsBackend:
         self._require()
         r = httpx.post(f"{self.backend_url}/api/approval/request",
                        json={"secret_name": name, "reason": reason, "scope": scope,
-                             "caller_process": caller or f"aw-app-secrets/{self.workspace}"},
+                             "caller_process": caller or f"aw-app-secrets/{self.workspace}",
+                             # What a 10min/60min window is scoped to. Sent
+                             # under the name aw-backend actually reads —
+                             # `caller_process` was never one of them, which is
+                             # why window scopes silently never worked.
+                             "caller_key": caller_key},
                        headers=self._headers(), timeout=self.timeout)
         r.raise_for_status()
         return r.json()["request_id"]
