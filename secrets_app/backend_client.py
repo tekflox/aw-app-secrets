@@ -122,7 +122,8 @@ class SecretsBackend:
     # ── the gated read ───────────────────────────────────────────────────
 
     def request_read(self, name: str, reason: str, scope: str = "one_shot",
-                     caller: str = "", caller_key: str | None = None) -> str:
+                     caller: str = "", caller_key: str | None = None,
+                     caller_agent: str | None = None) -> str:
         """Ask a human for this secret's value; returns the request id.
 
         Does not block. The value is collected by :meth:`poll_read` — the two
@@ -137,7 +138,11 @@ class SecretsBackend:
                              # under the name aw-backend actually reads —
                              # `caller_process` was never one of them, which is
                              # why window scopes silently never worked.
-                             "caller_key": caller_key},
+                             "caller_key": caller_key,
+                             # Stable across runs, so a per-secret allowlist
+                             # can name it. caller_key cannot: it is the
+                             # session, and that is new every time.
+                             "caller_agent": caller_agent},
                        headers=self._headers(), timeout=self.timeout)
         r.raise_for_status()
         return r.json()["request_id"]

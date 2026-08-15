@@ -45,9 +45,11 @@ class _FakeBackend:
     def delete_secret(self, name):
         return {"deleted": name}
 
-    def request_read(self, name, reason, scope="one_shot", caller="", caller_key=None):
+    def request_read(self, name, reason, scope="one_shot", caller="",
+                     caller_key=None, caller_agent=None):
         self.requests.append({"name": name, "reason": reason, "scope": scope,
-                              "caller": caller, "caller_key": caller_key})
+                              "caller": caller, "caller_key": caller_key,
+                              "caller_agent": caller_agent})
         return "req-1"
 
     def poll_read(self, request_id):
@@ -395,3 +397,42 @@ def test_a_caller_supplied_key_wins_over_anything_derived(monkeypatch):
     _tools(b).read_secret("k", "r", max_wait_s=30, caller_key="proc:other-host:42:99")
 
     assert b.requests[0]["caller_key"] == "proc:other-host:42:99"
+
+
+# ── the stable identity an allowlist can name ────────────────────────────
+
+def test_a_read_carries_the_agent_identity(monkeypatch):
+    """A session key changes every run and could never be written into an
+    allowlist. The agent id is the same next week."""
+    monkeypatch.setenv("AW_AGENT_SLUG", "nightly-backup")
+    b = _FakeBackend()
+    _tools(b).read_secret("k", "r", max_wait_s=30)
+
+    assert b.requests[0]["caller_agent"] == "agent:nightly-backup"
+
+
+def test_the_agent_identity_has_one_shape(monkeypatch):
+    """Whether it arrived already prefixed or bare, what reaches the allowlist
+    is identical — so what a human types is what both paths produce."""
+    from secrets_app import caller
+
+    monkeypatch.setenv("AW_AGENT_SLUG", "nightly-backup")
+    assert caller.agent_identity() == "agent:nightly-backup"
+    assert caller.agent_identity("agent:other") == "agent:other"
+    assert caller.agent_identity("other") == "agent:other"
+
+
+def test_an_unexpanded_agent_placeholder_is_no_identity(monkeypatch):
+    monkeypatch.delenv("AW_AGENT_SLUG", raising=False)
+    from secrets_app import caller
+
+    assert caller.agent_identity("${AW_AGENT_SLUG}") is None
+
+
+def test_the_agent_is_not_a_tool_argument_either():
+    """Same reason as the session: an agent that could name itself could name
+    the one on somebody's allowlist."""
+    from secrets_app.mcp import http_handler
+
+    read = next(t for t in http_handler.TOOLS_SCHEMA if t["name"] == "read_secret")
+    assert "agent" not in read["inputSchema"]["properties"]

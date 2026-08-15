@@ -97,7 +97,8 @@ class SecretTools:
     def read_secret(self, name: str, reason: str, scope: str | None = None,
                     caller: str = "", max_wait_s: int | None = None,
                     session: str | None = None,
-                    caller_key: str | None = None) -> dict:
+                    caller_key: str | None = None,
+                    agent: str | None = None) -> dict:
         """Request a human's approval for a secret.
 
         Returns a ``request_id`` ALWAYS — approved, denied or still pending.
@@ -151,7 +152,10 @@ class SecretTools:
         # deriving a local one here would key on the app server's parent, which
         # is the same for every REST caller in the workspace.
         key = (caller_key or "").strip() or caller_module.caller_key(session)
-        request_id = self.backend.request_read(name, reason, scope, caller, key)
+        # A second, STABLE identity, used only for the per-secret allowlist —
+        # a session key changes every run and could never be written down.
+        agent_id = caller_module.agent_identity(agent)
+        request_id = self.backend.request_read(name, reason, scope, caller, key, agent_id)
         log.info("secrets: read requested for %s (scope=%s, request=%s, max_wait=%ss)",
                  name, scope, request_id, wait)
 

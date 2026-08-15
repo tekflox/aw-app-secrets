@@ -122,4 +122,24 @@ def caller_key(session: str | None = None, *, allow_local: bool = False) -> str 
     return (terminal_key() if allow_local else None)
 
 
-__all__ = ["caller_key", "session_id", "terminal_key", "SESSION_ENV_VARS"]
+#: The agent's own id. Unlike the session, it is the same next week — which is
+#: what a per-secret allowlist can name ("agent:nightly-backup may read this
+#: key without waking anybody"). Injected by the Agents Platform.
+AGENT_ENV_VAR = "AW_AGENT_SLUG"
+
+
+def agent_identity(header: str | None = None) -> str | None:
+    """The stable identity an allowlist matches on, or None.
+
+    Always ``agent:<slug>``, whether it came from a forwarded header or from
+    this process's own env — one shape, so what a human types into the
+    allowlist is what both paths produce.
+    """
+    value = (header or "").strip() or (os.environ.get(AGENT_ENV_VAR) or "").strip()
+    if not value or _is_unexpanded(value):
+        return None
+    return value if value.startswith("agent:") else f"agent:{value}"
+
+
+__all__ = ["caller_key", "session_id", "terminal_key", "agent_identity",
+           "SESSION_ENV_VARS", "AGENT_ENV_VAR"]

@@ -139,7 +139,8 @@ TOOLS_SCHEMA = [
 ]
 
 
-async def handle(body: dict, tools, session: str | None = None) -> dict:
+async def handle(body: dict, tools, session: str | None = None,
+                 agent: str | None = None) -> dict:
     """Dispatch one JSON-RPC message. ``tools`` is a :class:`SecretTools`.
 
     ``session`` is the calling agent's session id, forwarded by the MCP gateway
@@ -180,7 +181,8 @@ async def handle(body: dict, tools, session: str | None = None) -> dict:
         if name == "read_secret":
             out = await run_in_threadpool(
                 tools.read_secret, args.get("name", ""), args.get("reason", ""),
-                args.get("scope"), "mcp", args.get("max_wait_s"), session)
+                args.get("scope"), "mcp", args.get("max_wait_s"), session,
+                None, agent)
             return _ok(req_id, json.dumps(out))
         if name == "collect_secret":
             out = await run_in_threadpool(tools.collect_secret, args.get("request_id", ""))

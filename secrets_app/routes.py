@@ -24,6 +24,9 @@ log = logging.getLogger("aw_apps.secrets")
 #: containers an agent runs in — unlike X-Aw-Caller-Run-Id, which is not.
 SESSION_HEADER = "X-Aw-Caller-Session-Id"
 
+#: The calling agent's id, same shape week to week — what an allowlist names.
+AGENT_HEADER = "X-Aw-Caller-Agent"
+
 
 def build_app(tools: SecretTools) -> FastAPI:
     api = FastAPI()
@@ -75,7 +78,8 @@ def build_app(tools: SecretTools) -> FastAPI:
                 tools.read_secret, name, (data or {}).get("reason", ""),
                 (data or {}).get("scope"), "rest", (data or {}).get("max_wait_s"),
                 (data or {}).get("session") or request.headers.get(SESSION_HEADER),
-                (data or {}).get("caller_key"))
+                (data or {}).get("caller_key"),
+                (data or {}).get("agent") or request.headers.get(AGENT_HEADER))
         except Exception as exc:  # noqa: BLE001
             raise _fail(exc) from exc
 
@@ -123,10 +127,11 @@ def build_app(tools: SecretTools) -> FastAPI:
         # header rather than a tool argument: the agent never gets to say who
         # it is, so it cannot claim another session's window grant.
         session = request.headers.get(SESSION_HEADER)
+        agent = request.headers.get(AGENT_HEADER)
         msgs = data if isinstance(data, list) else [data]
         out = []
         for m in msgs:
-            r = await mcp_handle(m, tools, session)
+            r = await mcp_handle(m, tools, session, agent)
             if r:
                 out.append(r)
         if not out:
