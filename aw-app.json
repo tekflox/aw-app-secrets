@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "id": "secrets",
   "name": "Secrets",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Read, write and list the workspace's secrets, where reading goes through a human approval on Telegram \u2014 unless that secret's gate has been turned off in Settings. Backed by aw-vault via aw-backend's /api/approval/* \u2014 this app stores nothing itself. NOT the same as an app's own config secrets (`ctx.secrets`, capability `secrets:own`), which are per-app, unshared and ungated.",
   "publisher": "TekFlox",
   "category": "Apps",
