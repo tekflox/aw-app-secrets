@@ -2,8 +2,8 @@
   "manifest_version": 1,
   "id": "secrets",
   "name": "Secrets",
-  "version": "0.4.0",
-  "description": "Read, write and list the workspace's secrets, where reading goes through a human approval on Telegram. Backed by aw-vault via aw-backend's /api/approval/* \u2014 this app stores nothing itself. NOT the same as an app's own config secrets (`ctx.secrets`, capability `secrets:own`), which are per-app, unshared and ungated.",
+  "version": "0.5.0",
+  "description": "Read, write and list the workspace's secrets, where reading goes through a human approval on Telegram — unless that secret's gate has been turned off in Settings. Backed by aw-vault via aw-backend's /api/approval/* — this app stores nothing itself. NOT the same as an app's own config secrets (`ctx.secrets`, capability `secrets:own`), which are per-app, unshared and ungated.",
   "publisher": "TekFlox",
   "category": "Apps",
   "tier": "inprocess",
@@ -24,6 +24,22 @@
         "prefix": "/api/apps/secrets"
       }
     ],
+    "windows": [
+      {
+        "id": "secrets.main",
+        "title": "Secrets",
+        "body": {
+          "type": "declarative",
+          "spec": "windows/main.json"
+        }
+      }
+    ],
+    "settings_panels": [
+      {
+        "id": "secrets.settings",
+        "window": "secrets.main"
+      }
+    ],
     "mcp": {
       "reload_on_save": true,
       "provides": [
@@ -37,7 +53,7 @@
       {
         "id": "aw-secrets",
         "path": "skills/aw-secrets/SKILL.md",
-        "description": "How to read, write and list workspace secrets from an agent \u2014 including what the human sees when a read is requested, which scope to ask for, and why a read can time out."
+        "description": "How to read, write and list workspace secrets from an agent — including what the human sees when a read is requested, which scope to ask for, and why a read can time out."
       }
     ]
   },

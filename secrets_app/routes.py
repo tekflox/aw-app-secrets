@@ -66,6 +66,32 @@ def build_app(tools: SecretTools) -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             raise _fail(exc) from exc
 
+    @api.put("/policies/{name}")
+    async def set_policy(name: str, data: dict = Body(default={})):
+        """Turn the human approval gate on or off for one secret.
+
+        Not mirrored as an MCP tool on purpose — see SecretTools.set_policy.
+        """
+        try:
+            return await run_in_threadpool(
+                tools.set_policy, name, bool((data or {}).get("auto_approve")),
+                str((data or {}).get("updated_by") or "aw-app-secrets"),
+                str((data or {}).get("note") or ""))
+        except Exception as exc:  # noqa: BLE001
+            raise _fail(exc) from exc
+
+    @api.get("/panel")
+    async def panel():
+        """The Settings UI. HTML, served from this app, rendered in an iframe.
+
+        Deliberately not under ``/api/apps/secrets/ui/`` — core serves app ESM
+        bundles from that prefix and would shadow this route.
+        """
+        from fastapi.responses import HTMLResponse
+
+        from .panel import PANEL_HTML
+        return HTMLResponse(PANEL_HTML)
+
     @api.get("/requests/{request_id}")
     async def collect_secret(request_id: str):
         try:

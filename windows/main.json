@@ -1,0 +1,15 @@
+{
+  "layout": "stack",
+  "regions": [
+    {
+      "id": "vault",
+      "widgets": [
+        {
+          "type": "iframe",
+          "title": "Secrets",
+          "src": "/api/apps/secrets/panel"
+        }
+      ]
+    }
+  ]
+}

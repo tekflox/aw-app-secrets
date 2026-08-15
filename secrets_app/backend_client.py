@@ -99,6 +99,26 @@ class SecretsBackend:
         r.raise_for_status()
         return r.json()
 
+    # ── release policy ───────────────────────────────────────────────────
+
+    def set_policy(self, name: str, auto_approve: bool, updated_by: str = "",
+                   note: str = "") -> dict:
+        """Turn the human approval gate on or off for one secret.
+
+        Lives in aw-backend, not here, and that is the point: aw-backend is
+        what decides whether a read needs a tap. A flag held app-side would be
+        a client asking itself for permission — anything else calling
+        ``/api/approval/request`` would still be gated, and this app skipping
+        its own prompt would just make the two disagree.
+        """
+        self._require()
+        r = httpx.put(f"{self.backend_url}/api/approval/policies/{name}",
+                      json={"auto_approve": bool(auto_approve),
+                            "updated_by": updated_by, "note": note},
+                      headers=self._headers(), timeout=self.timeout)
+        r.raise_for_status()
+        return r.json()
+
     # ── the gated read ───────────────────────────────────────────────────
 
     def request_read(self, name: str, reason: str, scope: str = "one_shot",

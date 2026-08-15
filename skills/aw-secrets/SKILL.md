@@ -1,6 +1,6 @@
 ---
 name: aw-secrets
-description: Read, write and list this workspace's shared secrets from an agent. Reading asks a human for approval on Telegram and blocks until they answer. Use whenever a task needs an API key, token, SSH key or password that is not already in your environment — and read this BEFORE calling read_secret, because every call interrupts a person.
+description: Read, write and list this workspace's shared secrets from an agent. Reading asks a human for approval on Telegram and returns a request_id you collect later, unless that secret's gate has been turned off. Use whenever a task needs an API key, token, SSH key or password that is not already in your environment — and read this BEFORE calling read_secret, because every call interrupts a person.
 ---
 
 # aw-secrets — the workspace's shared secrets
@@ -52,6 +52,26 @@ So:
   exist.
 - **Keep the value in a variable.** Delivery is one-shot: the value is cleared
   server-side the moment it reaches you. Re-reading means another prompt.
+
+## Some secrets no longer ask
+
+A human can turn the gate off for an individual secret, in the app's Settings
+(Apps › Secrets). `list_secrets` reports it per entry:
+
+```
+{"name": "staging_base_url", "description": "…", "auto_approve": true}
+```
+
+For those, `read_secret` returns `status: "approved"` with the value on the
+first call — no prompt, no `request_id` to collect, no waiting. Everything else
+about the call is unchanged, so you do not need to branch on it: read the
+`value` if it is there, collect later if it is not.
+
+Two things follow. **You cannot set this flag** — there is no tool for it, on
+purpose: an agent that could switch the gate off in front of a secret could
+then read that secret unasked, which would make the gate a formality. And a
+secret being open is not an invitation to read it speculatively; it is still
+someone's credential, and every read is still written to the audit log.
 
 ## Writing is NOT gated
 

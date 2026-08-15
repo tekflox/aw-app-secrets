@@ -48,14 +48,37 @@ class SecretTools:
         secrets = self.backend.list_secrets()
         return {
             "secrets": [
-                {"name": s.get("name"), "description": s.get("description") or ""}
+                {"name": s.get("name"), "description": s.get("description") or "",
+                 # Whether reading this one still asks a human. Included because
+                 # a list that hides it would describe the vault as uniformly
+                 # gated when parts of it are not.
+                 "auto_approve": bool(s.get("auto_approve"))}
                 for s in secrets
             ],
             "count": len(secrets),
             # Said out loud so an agent doesn't read the absence of values as a
             # failure and start hunting for a flag to make them appear.
-            "note": "names only — use read_secret to obtain a value (asks a human).",
+            "note": "names only — use read_secret to obtain a value. Ones marked "
+                    "auto_approve return instantly; the rest ask a human first.",
         }
+
+    def set_policy(self, name: str, auto_approve: bool, updated_by: str = "",
+                   note: str = "") -> dict:
+        """Turn the approval gate on or off for one secret.
+
+        Not exposed as an MCP tool, deliberately. An agent that can disable the
+        gate in front of a secret can then read that secret unasked, which
+        makes the gate a formality — the flag is set by a human in the app's
+        Settings, or by an explicit REST call, and never by the party the gate
+        exists to interrupt.
+        """
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("name is required")
+        result = self.backend.set_policy(name, auto_approve, updated_by, note)
+        log.warning("secrets: approval gate for %s is now %s (by %s)", name,
+                    "OFF (instant release)" if auto_approve else "ON", updated_by or "?")
+        return {"ok": True, **result}
 
     def write_secret(self, name: str, value: str, description: str = "") -> dict:
         name = (name or "").strip()

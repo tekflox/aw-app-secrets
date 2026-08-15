@@ -27,10 +27,16 @@ class _FakeBackend:
         ]
         self.requests = []
         self.writes = []
+        self.policies = []
         self.polls = 0
 
     def list_secrets(self):
         return self.secrets
+
+    def set_policy(self, name, auto_approve, updated_by="", note=""):
+        self.policies.append((name, auto_approve, updated_by))
+        return {"secret_name": name, "auto_approve": auto_approve,
+                "updated_by": updated_by, "note": note}
 
     def write_secret(self, name, value, description=""):
         self.writes.append((name, value, description))
@@ -69,8 +75,49 @@ def test_list_never_returns_a_value_even_if_the_backend_sends_one():
     out = _tools(_FakeBackend()).list_secrets()
 
     assert out["count"] == 1
-    assert out["secrets"] == [{"name": "resend_api_key", "description": "Resend"}]
+    assert out["secrets"] == [{"name": "resend_api_key", "description": "Resend",
+                               "auto_approve": False}]
     assert "LEAKED" not in str(out)
+
+
+def test_list_says_which_secrets_no_longer_ask_a_human():
+    """A list that hid this would describe the vault as uniformly gated while
+    part of it is open — the one fact a reader most needs from the inventory."""
+    b = _FakeBackend(secrets=[
+        {"name": "gated", "description": ""},
+        {"name": "open", "description": "", "auto_approve": True},
+    ])
+    by_name = {s["name"]: s for s in _tools(b).list_secrets()["secrets"]}
+
+    assert by_name["gated"]["auto_approve"] is False
+    assert by_name["open"]["auto_approve"] is True
+
+
+# ── policy ───────────────────────────────────────────────────────────────
+
+def test_setting_the_policy_reaches_the_backend_not_local_state():
+    """The gate is enforced in aw-backend. A flag kept here would be this app
+    asking itself for permission while every other caller stayed gated."""
+    b = _FakeBackend()
+    out = _tools(b).set_policy("resend_api_key", True, updated_by="settings-panel")
+
+    assert out["ok"] is True
+    assert b.policies == [("resend_api_key", True, "settings-panel")]
+
+
+def test_setting_the_policy_requires_a_name():
+    with pytest.raises(ValueError, match="name is required"):
+        _tools(_FakeBackend()).set_policy("  ", True)
+
+
+def test_policy_is_not_an_mcp_tool():
+    """An agent that can switch the gate off can then read the secret unasked,
+    which makes the gate a formality. Setting it stays a human action."""
+    from secrets_app.mcp import http_handler
+
+    exposed = {t["name"] for t in http_handler.TOOLS_SCHEMA}
+    assert "set_policy" not in exposed
+    assert "read_secret" in exposed
 
 
 # ── write ────────────────────────────────────────────────────────────────
