@@ -257,12 +257,23 @@ def test_an_explicit_scope_is_passed_through():
 
 # ── no cloud link ────────────────────────────────────────────────────────
 
-def test_no_backend_link_is_its_own_error():
+def test_no_backend_link_is_its_own_error(monkeypatch):
     """A BYOD workspace that never linked has no store at all — that is not the
-    same as a secret being missing, and the message must not suggest it is."""
+    same as a secret being missing, and the message must not suggest it is.
+
+    The env has to be cleared explicitly. `SecretsBackend.__init__` falls back
+    to AW_BACKEND_URL / AW_WORKSPACE_HOST_TOKEN when its arguments are falsy,
+    so passing "" does NOT simulate an unlinked workspace — it just defers to
+    whatever the machine has. On a linked one (every real workspace) the
+    backend came out configured and nothing raised, so this test passed only
+    where it could not have caught the regression it exists for.
+    """
     from secrets_app.backend_client import SecretsBackend
 
+    monkeypatch.delenv("AW_BACKEND_URL", raising=False)
+    monkeypatch.delenv("AW_WORKSPACE_HOST_TOKEN", raising=False)
     b = SecretsBackend(backend_url="", workspace="aw", token="")
+    assert not b.configured
     with pytest.raises(BackendUnavailable, match="no cloud link"):
         SecretTools(b).list_secrets()
 
