@@ -45,6 +45,33 @@ class ApprovalDenied(RuntimeError):
     """The human said no, or the request expired without an answer."""
 
 
+class BackendRequestFailed(RuntimeError):
+    """aw-backend answered a call with a non-2xx status.
+
+    Carries the real ``status_code`` and JSON ``detail`` aw-backend sent, so
+    a caller can surface those instead of httpx's own generic "Client error
+    '400 Bad Request' for url '...'" — that generic text was all a user ever
+    saw for a downstream failure (e.g. the approval-delivery 500 that becomes
+    a 400 here), which is what made bug:ssh-approval-request-400-error-
+    swallowed slow to diagnose: the real reason never left aw-backend.
+    """
+
+    def __init__(self, status_code: int, detail: str) -> None:
+        self.status_code = status_code
+        self.detail = detail
+        super().__init__(f"aw-backend ({status_code}): {detail}")
+
+
+def _response_detail(r: httpx.Response) -> str:
+    """The JSON ``detail`` aw-backend sent with an error response, or the raw
+    body when it didn't answer with the JSON shape every FastAPI error does."""
+    try:
+        detail = r.json().get("detail")
+    except Exception:
+        detail = None
+    return detail if detail else r.text[:300]
+
+
 class SecretsBackend:
     def __init__(self, backend_url: str | None = None, workspace: str | None = None,
                  token: str | None = None, timeout: float = DEFAULT_TIMEOUT) -> None:
@@ -149,7 +176,8 @@ class SecretsBackend:
                              # session, and that is new every time.
                              "caller_agent": caller_agent},
                        headers=self._headers(), timeout=self.timeout)
-        r.raise_for_status()
+        if r.is_error:
+            raise BackendRequestFailed(r.status_code, _response_detail(r))
         return r.json()["request_id"]
 
     def describe(self, request_id: str) -> dict:

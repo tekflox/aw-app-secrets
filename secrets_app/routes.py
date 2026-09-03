@@ -14,7 +14,7 @@ import logging
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 
-from .backend_client import ApprovalDenied, BackendUnavailable
+from .backend_client import ApprovalDenied, BackendRequestFailed, BackendUnavailable
 from .tools import SecretTools
 
 log = logging.getLogger("aw_apps.secrets")
@@ -37,6 +37,12 @@ def build_app(tools: SecretTools) -> FastAPI:
         if isinstance(exc, ApprovalDenied):
             # 403, not 500: a refusal is the system working, not breaking.
             return HTTPException(status_code=403, detail=str(exc))
+        if isinstance(exc, BackendRequestFailed):
+            # Pass through aw-backend's own status + detail rather than
+            # collapsing every downstream failure to a generic 502 — that
+            # generic text (httpx's "Client error '400 Bad Request' for url
+            # ...") was all a user ever saw of the real reason.
+            return HTTPException(status_code=exc.status_code, detail=exc.detail)
         if isinstance(exc, ValueError):
             return HTTPException(status_code=400, detail=str(exc))
         return HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}")
