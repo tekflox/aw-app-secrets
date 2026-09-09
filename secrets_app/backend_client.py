@@ -1,4 +1,5 @@
-"""HTTP client to aw-backend's ``/api/approval/*`` — the secret store.
+"""HTTP client to aw-backend's ``/api/workspaces/{slug}/approval/*`` — the
+secret store.
 
 Auth: the workspace's OWN host credential, ``AW_WORKSPACE_HOST_TOKEN`` (an
 ``awlk_`` token minted by the aw-remote-host ``/link`` handshake and kept in
@@ -19,11 +20,15 @@ no other. No service account, and no long-lived credential carrying a human's
 identity, is needed for this app to reach the secret API — a conclusion this
 app was very nearly built on the opposite of.
 
-The one thing still missing is on the far side: ``/api/approval/*`` is gated by
-``require_identity`` (user JWTs only) rather than ``require_workspace_actor``,
-so these calls 401 today. That is a change to aw-backend, not to this client —
-which is why this module is written against the credential that *should* work
-rather than a workaround that would have to be unpicked later.
+2026-09-09: the far-side gap this module used to work around is closed. The
+approval routes moved from the unscoped ``/api/approval/*`` to
+``/api/workspaces/{slug}/approval/*`` and their guard changed to
+``require_workspace_actor`` — the same one this client's token already
+satisfies — as part of scoping the vault itself per workspace (before this,
+ANY linked workspace's host token could read ANY workspace's secrets; see
+identity_guard.py's history). ``self.workspace`` below is what supplies the
+``{slug}`` — it was already being read from ``AW_WORKSPACE`` for the URL
+path's `/app-installs` calls, just not yet threaded into these.
 """
 from __future__ import annotations
 
@@ -82,17 +87,25 @@ class SecretsBackend:
 
     @property
     def configured(self) -> bool:
-        return bool(self.backend_url and self.token)
+        return bool(self.backend_url and self.token and self.workspace)
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.token}"}
 
+    def _base(self) -> str:
+        """This workspace's own approval-route root — every call below hangs
+        off this. ``self.workspace`` is what the URL's ``{slug}`` needs; it
+        also has to be the workspace the host token actually belongs to, or
+        aw-backend's ``require_workspace_actor`` 401s (that mismatch is
+        exactly what it exists to catch)."""
+        return f"{self.backend_url}/api/workspaces/{self.workspace}/approval"
+
     def _require(self) -> None:
         if not self.configured:
             raise BackendUnavailable(
-                "no cloud link: AW_BACKEND_URL and AW_WORKSPACE_HOST_TOKEN must both be set. "
-                "A BYOD workspace that never completed the aw-remote-host /link handshake has "
-                "no secret store to reach."
+                "no cloud link: AW_BACKEND_URL, AW_WORKSPACE and AW_WORKSPACE_HOST_TOKEN must "
+                "all be set. A BYOD workspace that never completed the aw-remote-host /link "
+                "handshake has no secret store to reach."
             )
 
     # ── inventory ────────────────────────────────────────────────────────
@@ -100,7 +113,7 @@ class SecretsBackend:
     def list_secrets(self) -> list[dict]:
         """Names and metadata only — never values. Listing is not a read."""
         self._require()
-        r = httpx.get(f"{self.backend_url}/api/approval/secrets",
+        r = httpx.get(f"{self._base()}/secrets",
                       headers=self._headers(), timeout=self.timeout)
         r.raise_for_status()
         return r.json().get("secrets", [])
@@ -113,7 +126,7 @@ class SecretsBackend:
         gate exists to stop a value *leaving* the vault, which is `read`.
         """
         self._require()
-        r = httpx.post(f"{self.backend_url}/api/approval/secrets",
+        r = httpx.post(f"{self._base()}/secrets",
                        json={"name": name, "value": value, "description": description},
                        headers=self._headers(), timeout=self.timeout)
         r.raise_for_status()
@@ -121,7 +134,7 @@ class SecretsBackend:
 
     def delete_secret(self, name: str) -> dict:
         self._require()
-        r = httpx.delete(f"{self.backend_url}/api/approval/secrets/{name}",
+        r = httpx.delete(f"{self._base()}/secrets/{name}",
                          headers=self._headers(), timeout=self.timeout)
         r.raise_for_status()
         return r.json()
@@ -135,7 +148,7 @@ class SecretsBackend:
         Lives in aw-backend, not here, and that is the point: aw-backend is
         what decides whether a read needs a tap. A flag held app-side would be
         a client asking itself for permission — anything else calling
-        ``/api/approval/request`` would still be gated, and this app skipping
+        ``.../approval/request`` would still be gated, and this app skipping
         its own prompt would just make the two disagree.
         """
         self._require()
@@ -145,7 +158,7 @@ class SecretsBackend:
         # means "leave the allowlist alone", and sending "" would wipe it.
         if auto_approve_for is not None:
             body["auto_approve_for"] = auto_approve_for
-        r = httpx.put(f"{self.backend_url}/api/approval/policies/{name}",
+        r = httpx.put(f"{self._base()}/policies/{name}",
                       json=body,
                       headers=self._headers(), timeout=self.timeout)
         r.raise_for_status()
@@ -163,7 +176,7 @@ class SecretsBackend:
         hanging silently for up to five minutes with nothing on screen.
         """
         self._require()
-        r = httpx.post(f"{self.backend_url}/api/approval/request",
+        r = httpx.post(f"{self._base()}/request",
                        json={"secret_name": name, "reason": reason, "scope": scope,
                              "caller_process": caller or f"aw-app-secrets/{self.workspace}",
                              # What a 10min/60min window is scoped to. Sent
@@ -189,7 +202,7 @@ class SecretsBackend:
         to know which of several in-flight approvals it belongs to.
         """
         self._require()
-        r = httpx.get(f"{self.backend_url}/api/approval/status/{request_id}",
+        r = httpx.get(f"{self._base()}/status/{request_id}",
                       headers=self._headers(), timeout=self.timeout)
         if r.status_code == 404:
             return {"status": "not_found"}
@@ -205,7 +218,7 @@ class SecretsBackend:
         hoping to re-read it.
         """
         self._require()
-        r = httpx.get(f"{self.backend_url}/api/approval/status/{request_id}",
+        r = httpx.get(f"{self._base()}/status/{request_id}",
                       headers=self._headers(), timeout=self.timeout)
         if r.status_code == 404:
             raise ApprovalDenied(f"request {request_id} is unknown or has expired")
