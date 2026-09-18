@@ -332,6 +332,11 @@ def _cmd_rm(args: list[str]) -> int:
 
     status, body = request("DELETE", f"{SECRETS_PREFIX}/secrets/{name}")
     body = _checked(name, status, body)
+    # An outstanding approval for a secret that no longer exists is not worth
+    # resuming, and leaving the note behind is actively wrong: recreate the
+    # same name inside MAX_AGE_S and the next `get` would resume the DELETED
+    # secret's request instead of asking about the new one.
+    pending.forget(name)
     _announce(f"Deleted {name!r}.")
     return EXIT_OK
 

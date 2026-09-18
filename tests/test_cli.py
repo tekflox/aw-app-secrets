@@ -277,6 +277,17 @@ def test_rm_with_yes_deletes(vault):
     assert vault.writes == [("DELETE", "/api/apps/secrets/secrets/resend_api_key", None)]
 
 
+def test_rm_forgets_any_outstanding_approval_for_that_secret(vault):
+    """Found live: QA deleted the smoke secret and its pending id stayed in
+    the file. Recreate the same name inside MAX_AGE_S and the next `get`
+    would resume the DELETED secret's request instead of asking about the
+    new one."""
+    pending.remember("resend_api_key", "REQ9")
+
+    assert cli.main(["rm", "resend_api_key", "--yes"]) == cli.EXIT_OK
+    assert pending.get("resend_api_key") is None
+
+
 def test_rm_of_an_unknown_name_is_a_sentence_not_a_stack_trace(monkeypatch, capsys):
     def _request(method, path, body=None, timeout=None):
         return 404, {"detail": "secret 'ghost' not found"}
