@@ -5,9 +5,10 @@ description: Read, write and list this workspace's shared secrets from an agent.
 
 # aw-secrets — the workspace's shared secrets
 
-Three tools, from `aw-app-secrets`, exposed through the gateway as
+Five tools, from `aw-app-secrets`, exposed through the gateway as
 `aw__secrets__list_secrets`, `aw__secrets__write_secret`,
-`aw__secrets__read_secret`.
+`aw__secrets__delete_secret`, `aw__secrets__read_secret` and
+`aw__secrets__collect_secret`.
 
 Backed by **aw-vault** (Postgres, encrypted) through aw-backend's
 `/api/approval/*`. The app itself stores nothing.
@@ -82,6 +83,49 @@ gate exists to stop a value *leaving* the vault.
 Consequence worth knowing: writing an existing name **overwrites it**, with no
 prompt and no undo. Call `list_secrets` first if you are not certain the name
 is free.
+
+`delete_secret` is ungated for the same reason — a delete releases no value, so
+there is nothing for the gate to protect. It is irreversible: the value is gone
+from the vault, not archived. It is also the thing to use when you want a
+secret *empty*, because `write_secret` refuses an empty value rather than let a
+typo blank one silently.
+
+## From a terminal or a shell script — `aw-workspace-cli secrets`
+
+The same five verbs, for when the caller is a person at a prompt or a script,
+not an agent with a next turn.
+
+```bash
+aw-workspace-cli secrets ls [--json]
+aw-workspace-cli secrets get <name> --reason "why" [--scope 60min] [--eval] [--json]
+aw-workspace-cli secrets get <name> --no-wait          # print the request_id, exit 2
+aw-workspace-cli secrets collect <request_id>
+printf '%s' "$VALUE" | aw-workspace-cli secrets set <name> [--description "…"]
+aw-workspace-cli secrets rm <name> --yes
+```
+
+Four differences from the MCP tools, each deliberate:
+
+- **`get` blocks by default** (`--wait 300`). A person at a terminal has no
+  "later" to collect in. Pass `--no-wait` for the MCP-style behaviour: it
+  prints the `request_id` on stdout, remembers it, and exits 2.
+- **The value goes to stdout and nothing else does.** Progress and errors are
+  on stderr, so `aw-workspace-cli secrets get deploy_key > id_ed25519` works.
+  `--eval` prints `export NAME=value` lines instead, for
+  `eval "$(aw-workspace-cli secrets get deploy_env --eval)"`.
+- **Running `get` again resumes** an approval you already asked for instead of
+  sending a second prompt — so the "approve it and run the same command again"
+  advice is literally true.
+- **`set` never takes the value as an argument**, only from stdin (or a
+  no-echo prompt on a tty). argv lands in shell history, in `ps`, and in
+  `/proc/<pid>/cmdline`.
+
+Exit codes: `0` ok · `1` error or denial · `2` requested but not collected yet
+· `130` interrupted. `1` and `2` are separate on purpose — retrying a `2` is
+reasonable, retrying a `1` means asking a person who already said no.
+
+There is no `set-policy` verb, for the reason above: the caller a gate exists
+to interrupt must not be able to disarm it.
 
 ## Your `reason` is the whole decision
 

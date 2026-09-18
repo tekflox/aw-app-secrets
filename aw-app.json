@@ -45,6 +45,7 @@
       "provides": [
         "list_secrets",
         "write_secret",
+        "delete_secret",
         "read_secret",
         "collect_secret"
       ]

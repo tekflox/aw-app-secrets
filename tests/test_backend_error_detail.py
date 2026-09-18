@@ -73,6 +73,48 @@ def test_request_read_succeeds_on_a_2xx_as_before(monkeypatch):
     assert b.request_read("k", "r") == "req-1"
 
 
+# ── backend_client.delete_secret ────────────────────────────────────────
+
+DELETE_DETAIL = "secret 'po-smoke-test-rm' not found"
+
+
+def test_delete_secret_carries_the_real_detail_too(monkeypatch):
+    """Same bug, second site, found live: deleting a name that does not exist
+    makes aw-backend answer 500 (not 404), and ``raise_for_status()`` made the
+    whole diagnosis "Server error '500 Internal Server Error' for url
+    'https://api.aw.tekflox.com/.../secrets/po-smoke-test-rm'" — a URL and a
+    status code, with no statement of what was wrong."""
+    monkeypatch.setattr(httpx, "delete",
+                        lambda *a, **kw: _FakeHTTPResponse(500, {"detail": DELETE_DETAIL}))
+    b = SecretsBackend(backend_url="http://backend", workspace="aw", token="tok")
+
+    with pytest.raises(BackendRequestFailed) as exc_info:
+        b.delete_secret("po-smoke-test-rm")
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == DELETE_DETAIL
+
+
+def test_delete_secret_succeeds_on_a_2xx_as_before(monkeypatch):
+    monkeypatch.setattr(httpx, "delete",
+                        lambda *a, **kw: _FakeHTTPResponse(200, {"ok": True}))
+    b = SecretsBackend(backend_url="http://backend", workspace="aw", token="tok")
+
+    assert b.delete_secret("k") == {"ok": True}
+
+
+def test_the_delete_route_passes_that_status_and_detail_through():
+    class _FailingDelete:
+        def delete_secret(self, name):
+            raise BackendRequestFailed(500, DELETE_DETAIL)
+
+    client = TestClient(build_app(SecretTools(_FailingDelete())))
+    r = client.delete("/secrets/po-smoke-test-rm")
+
+    assert r.status_code == 500, r.text
+    assert r.json()["detail"] == DELETE_DETAIL
+
+
 # ── routes._fail ─────────────────────────────────────────────────────────
 
 class _FailingBackend:

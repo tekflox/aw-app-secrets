@@ -133,10 +133,25 @@ class SecretsBackend:
         return r.json()
 
     def delete_secret(self, name: str) -> dict:
+        """Delete a secret. Ungated for the same reason write is: no value
+        leaves the vault.
+
+        ``BackendRequestFailed`` rather than ``raise_for_status()``, for the
+        same reason ``request_read`` uses it — and this one is not
+        hypothetical. Deleting a name that does not exist makes aw-backend
+        answer **500**, not 404, and ``raise_for_status`` turned that into the
+        caller seeing httpx's own "Server error '500 Internal Server Error'
+        for url 'https://api.aw.tekflox.com/api/workspaces/aw/approval/
+        secrets/<name>'" — a URL, a status, and no statement of what went
+        wrong. Passing the status and aw-backend's real ``detail`` through
+        lets both front doors (the CLI's ``rm`` and the ``delete_secret`` MCP
+        tool) say the thing that actually happened.
+        """
         self._require()
         r = httpx.delete(f"{self._base()}/secrets/{name}",
                          headers=self._headers(), timeout=self.timeout)
-        r.raise_for_status()
+        if r.is_error:
+            raise BackendRequestFailed(r.status_code, _response_detail(r))
         return r.json()
 
     # ── release policy ───────────────────────────────────────────────────

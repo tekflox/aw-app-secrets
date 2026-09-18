@@ -63,6 +63,27 @@ TOOLS_SCHEMA = [
         },
     },
     {
+        "name": "delete_secret",
+        "description": (
+            "Delete a secret. NOT gated by approval, for the same reason "
+            "write_secret is not: a delete releases no value, so there is "
+            "nothing for the gate to protect. It is irreversible though — the "
+            "value is gone from the vault, not archived — so call list_secrets "
+            "first and be sure the name is the one you mean.\n\n"
+            "This is what write_secret points you at when you try to clear a "
+            "secret by writing an empty value, so that emptying one is never "
+            "something a typo can do silently."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string",
+                         "description": "Secret name to delete (see list_secrets)."},
+            },
+            "required": ["name"],
+        },
+    },
+    {
         "name": "read_secret",
         "description": (
             "Ask a human to release a secret. Sends a prompt to the sysadmin "
@@ -177,6 +198,9 @@ async def handle(body: dict, tools, session: str | None = None,
             out = await run_in_threadpool(
                 tools.write_secret, args.get("name", ""), args.get("value", ""),
                 args.get("description", ""))
+            return _ok(req_id, json.dumps(out))
+        if name == "delete_secret":
+            out = await run_in_threadpool(tools.delete_secret, args.get("name", ""))
             return _ok(req_id, json.dumps(out))
         if name == "read_secret":
             out = await run_in_threadpool(
